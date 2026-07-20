@@ -1,5 +1,128 @@
 -- after a few trials and errors downloading this JSON database, I used AI to help me overcome some issues (NULL values, no keys)
+-- so far, I tried these approaches:
 
+-- 1)
+import os
+import json
+import requests
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+# --- STEP 1: INITIALIZE ENGINES & RESET DATABASE ---
+root_engine = create_engine("mysql+pymysql://root:yourpassword@localhost")
+db_name = "statsbomb_db"
+
+with root_engine.connect() as conn:
+    conn.execute(text(f"DROP DATABASE IF EXISTS {db_name};"))
+    conn.execute(text(f"CREATE DATABASE {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
+    print(f"Database '{db_name}' has been successfully reset.")
+
+engine = create_engine(f"mysql+pymysql://root:yourpassword@localhost/{db_name}")
+
+# Official GitHub Raw Content Base URL
+GITHUB_BASE = "https://githubusercontent.com"
+
+# --- STEP 2: DEFINE UTILITY FUNCTIONS ---
+def clean_dataframe(df):
+    """Clean column names and standardizes data types for MySQL."""
+    if df.empty: return df
+    df.columns = [col.replace('.', '_') for col in df.columns]
+    for col in df.columns:
+        if df[col].dtype == 'object' and df[col].isin([True, False]).all():
+            df[col] = df[col].astype('boolean')
+        if 'id' in col.lower() and df[col].dtype == 'float64':
+            df[col] = df[col].astype('Int64')
+    return df
+
+def safe_append_to_sql(df, table_name, sql_engine):
+    """Dynamically adds new columns to MySQL when seen in streaming JSONs."""
+    if df.empty: return
+    with sql_engine.connect() as conn:
+        table_exists = conn.dialect.has_table(conn, table_name)
+        if table_exists:
+            existing_cols = pd.read_sql(f"SELECT * FROM {table_name} LIMIT 0", conn).columns.tolist()
+            new_cols = [c for c in df.columns if c not in existing_cols]
+            for col in new_cols:
+                col_type = "LONGTEXT"
+                if df[col].dtype in ['int64', 'Int64']: col_type = "BIGINT"
+                elif df[col].dtype == 'float64': col_type = "DOUBLE"
+                elif df[col].dtype == 'boolean': col_type = "BOOLEAN"
+                conn.execute(text(f"ALTER TABLE `{table_name}` ADD COLUMN `{col}` {col_type};"))
+            for col in existing_cols:
+                if col not in df.columns: df[col] = None
+            df = df[existing_cols + new_cols]
+    df.to_sql(table_name, con=sql_engine, if_exists='append', index=False)
+
+# --- STEP 3A: STREAM COMPETITIONS ---
+print("Streaming Competitions from GitHub...")
+comp_url = f"{GITHUB_BASE}competitions.json"
+comp_json = requests.get(comp_url).json()
+
+df_comp = pd.json_normalize(comp_json)
+df_comp = clean_dataframe(df_comp)
+df_comp = df_comp.drop_duplicates(subset=['competition_id', 'season_id'])
+df_comp.to_sql('competitions', con=engine, if_exists='append', index=False)
+print("Competitions loaded.")
+
+# --- STEP 3B: DISCOVER AND STREAM MATCHES ---
+print("Gathering match list...")
+all_matches = []
+for _, row in df_comp.iterrows():
+    comp_id = row['competition_id']
+    season_id = row['season_id']
+    
+    # Matches are filed under competition_id/season_id.json
+    match_url = f"{GITHUB_BASE}matches/{comp_id}/{season_id}.json"
+    response = requests.get(match_url)
+    if response.status_code == 200:
+        all_matches.extend(response.json())
+
+df_matches = pd.json_normalize(all_matches)
+df_matches = clean_dataframe(df_matches)
+df_matches = df_matches.drop_duplicates(subset=['match_id'])
+df_matches.to_sql('matches', con=engine, if_exists='append', index=False)
+print(f"Stored {len(df_matches)} unique matches.")
+
+# --- STEP 3C: STREAM LINEUPS AND EVENTS GAME-BY-GAME ---
+print("Streaming Lineups and Events (Game-by-Game)...")
+total_games = len(df_matches)
+
+for idx, match_id in enumerate(df_matches['match_id'].unique()):
+    m_id = str(match_id)
+    
+    # Progress check-in
+    if idx % 50 == 0 and idx > 0:
+        print(f"Progress: {idx}/{total_games} games securely streamed...")
+
+    # Stream Lineups
+    lineup_url = f"{GITHUB_BASE}lineups/{m_id}.json"
+    l_res = requests.get(lineup_url)
+    if l_res.status_code == 200 and l_res.json():
+        df_lineups = pd.json_normalize(l_res.json(), record_path=['lineup'], meta=['team_id', 'team_name'])
+        df_lineups['match_id'] = m_id
+        df_lineups = clean_dataframe(df_lineups)
+        safe_append_to_sql(df_lineups, 'lineups', engine)
+
+    # Stream Events
+    event_url = f"{GITHUB_BASE}events/{m_id}.json"
+    e_res = requests.get(event_url)
+    if e_res.status_code == 200 and e_res.json():
+        df_events = pd.json_normalize(e_res.json())
+        df_events['match_id'] = m_id
+        
+        # Serialize coordinates/lists into strings so MySQL handles them seamlessly
+        for col in df_events.columns:
+            if df_events[col].apply(lambda x: isinstance(x, (list, dict))).any():
+                df_events[col] = df_events[col].apply(lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x)
+                
+        df_events = clean_dataframe(df_events)
+        safe_append_to_sql(df_events, 'events', engine)
+
+print("Complete! Database is populated and no local disk storage was harmed.")
+
+
+
+--2
 
 import os
 import json
