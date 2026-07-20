@@ -1,0 +1,105 @@
+import os
+import sqlite3
+import pandas as pd
+
+# Define the absolute directory where your .db file actually sits
+
+-- I downloaded the file from "https://github.com/jfjelstul/worldcup/blob/master/data-sqlite/" as a sqlite file and then converted it to .cvs
+
+db_directory = r"C:\Users\XXXX\XXXXX"  # Change this to your real folder path
+db_name = "worldcup.db"                  
+
+full_path = os.path.join(db_directory, db_name)
+
+# Verify the file genuinely exists on your hard drive before connecting
+if os.path.exists(full_path):
+    print(" Found the file successfully!")
+    conn = sqlite3.connect(full_path)
+    
+    # Check the structural metadata again
+    tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", conn)
+    print("\nActual Tables Found:\n", tables)
+else:
+    print(f" ERROR: Python cannot see a file at: {full_path}. Double check the path string.")
+
+# Query the SQLite master directory catalog
+tables_query = "SELECT name FROM sqlite_master WHERE type='table';"
+df_tables = pd.read_sql_query(tables_query, conn)
+
+print("TABLES FOUND IN DATABASE:")
+display(df_tables)
+
+# Save the list of table names as a Python list for the next step
+table_names = df_tables['name'].tolist()
+
+print("EXPLORING COLUMNS INSIDE TABLES:\n" + "="*40)
+
+for table in table_names:
+    # Use PRAGMA to dynamically fetch metadata for the current table
+    columns_query = f"PRAGMA table_info({table});"
+    df_columns = pd.read_sql_query(columns_query, conn)
+    
+    print(f"\n Table Name: '{table}'")
+    print(f"   Total Columns: {len(df_columns)}")
+    # Display only the column names and their data types
+    display(df_columns[['name', 'type']])
+    print("-" * 40)
+
+-- After all these inquires, I created the connection to work with it in MySQL
+
+import sqlite3
+import urllib.parse
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+# (Uses the 'db_path' variable we defined in the previous steps)
+sqlite_conn = sqlite3.connect(full_path)
+
+# Get the list of all tables in the SQLite database
+tables_df = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", sqlite_conn)
+table_names = tables_df['name'].tolist()
+
+# 2. Configure your MySQL connection credentials
+MYSQL_USER = "root"
+MYSQL_PASS = "yourpassword"  
+MYSQL_HOST = "127.0.0.1"
+MYSQL_PORT = "3306"
+
+# Encode credentials safely for the connection URL
+encoded_pass = urllib.parse.quote_plus(MYSQL_PASS)
+base_url = f"mysql+mysqlconnector://{MYSQL_USER}:{encoded_pass}@{MYSQL_HOST}:{MYSQL_PORT}"
+
+# 3. Initialize a fresh target database schema in MySQL
+base_engine = create_engine(base_url)
+with base_engine.connect() as conn:
+    # Drops the old schema if it exists to prevent overlapping records
+    conn.execute(text("DROP DATABASE IF EXISTS fifa_historical_analytics;"))
+    conn.execute(text("CREATE DATABASE fifa_historical_analytics;"))
+print(" Created fresh 'fifa_historical_analytics' database in MySQL.")
+
+# Connect directly to the new MySQL schema
+mysql_engine = create_engine(f"{base_url}/fifa_historical_analytics")
+
+# 4. Loop through each table and migrate the data
+print("\n Starting data migration from SQLite to MySQL Workbench...")
+print("="*50)
+
+for table in table_names:
+    print(f"Reading table '{table}' from SQLite...")
+    
+    # Extract the full table data from SQLite
+    df = pd.read_sql_query(f"SELECT * FROM {table};", sqlite_conn)
+    
+    # Standardize column headers (lowercase, remove spaces) to prevent MySQL errors
+    df.columns = [c.lower().strip().replace(' ', '_') for c in df.columns]
+    
+    # Push the clean DataFrame into MySQL
+    # 'replace' automatically builds the clean table structures for you
+    df.to_sql(table, con=mysql_engine, if_exists='replace', index=False)
+    
+    print(f" Successfully migrated {len(df)} rows into MySQL table: '{table}'")
+
+# 5. Close connections safely
+sqlite_conn.close()
+print("="*50)
+print("Migration finalized!")
