@@ -1,0 +1,143 @@
+-- after a few trials and errors downloading this JSON database, I used AI to help me overcome some issues (NULL values, no keys)
+
+
+import os
+import json
+import requests
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+# --- STEP 1: INITIALIZE ENGINES & RESET DATABASE ---
+root_engine = create_engine("mysql+pymysql://root:yourpassword@localhost")
+db_name = "statsbomb_db2"
+
+with root_engine.connect() as conn:
+    conn.execute(text(f"DROP DATABASE IF EXISTS {db_name};"))
+    conn.execute(text(f"CREATE DATABASE {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
+    print(f"Database '{db_name}' has been successfully reset.")
+
+engine = create_engine(f"mysql+pymysql://root:yourpassword@localhost/{db_name}")
+
+# CORRECTED STATSBOMB OPEN DATA BASE URL
+DATA_BASE_URL = "https://raw.githubusercontent.com/statsbomb/open-data/master/data/"
+
+# --- STEP 2: HYBRID ETL CLEANING FUNCTION ---
+def process_events_hybrid(events_json, match_id):
+    """
+    Extracts high-level relational metrics into dedicated columns
+    and serializes the rest into a single JSON blob column.
+    """
+    cleaned_events = []
+    
+    for event in events_json:
+        # 1. Extract core attributes common to all queries
+        flat_event = {
+            "event_id": event.get("id"),
+            "match_id": int(match_id),
+            "index": event.get("index"),
+            "period": event.get("period"),
+            "timestamp": event.get("timestamp"),
+            "minute": event.get("minute"),
+            "second": event.get("second"),
+            "type_id": event.get("type", {}).get("id"),
+            "type_name": event.get("type", {}).get("name"),
+            "possession": event.get("possession"),
+            "possession_team_id": event.get("possession_team", {}).get("id"),
+            "possession_team_name": event.get("possession_team", {}).get("name"),
+            "team_id": event.get("team", {}).get("id"),
+            "team_name": event.get("team", {}).get("name"),
+            "player_id": event.get("player", {}).get("id"),
+            "player_name": event.get("player", {}).get("name"),
+        }
+        
+        # 2. Bundle all remaining dynamic properties (pass, shot, etc.) into metadata
+        meta_keys = [k for k in event.keys() if k not in ['id', 'index', 'period', 'timestamp', 'minute', 'second', 'type', 'possession', 'possession_team', 'team', 'player']]
+        metadata = {k: event[k] for k in meta_keys}
+        
+        # Convert dictionary to JSON string for MySQL JSON data type compatibility
+        flat_event["metadata_blob"] = json.dumps(metadata)
+        cleaned_events.append(flat_event)
+        
+    return pd.DataFrame(cleaned_events)
+
+# --- STEP 3A: STREAM COMPETITIONS ---
+print("Streaming Competitions...")
+# Competitions sits directly in the root data folder
+comp_url = f"{DATA_BASE_URL}competitions.json"
+
+response = requests.get(comp_url)
+if response.status_code != 200:
+    raise Exception(f"Failed to fetch competitions. Status code: {response.status_code}. Check URL: {comp_url}")
+
+comp_json = response.json()
+df_comp = pd.json_normalize(comp_json)
+# ... [rest of your cleaning and SQL saving logic] ...
+
+
+# --- STEP 3B: DISCOVER AND STREAM MATCHES ---
+print("Gathering match list...")
+all_matches = []
+for _, row in df_comp.iterrows():
+    comp_id = row['competition_id']
+    season_id = row['season_id']
+    
+    # Matches sit inside a nested "matches" subfolder
+    match_url = f"{DATA_BASE_URL}matches/{comp_id}/{season_id}.json"
+    response = requests.get(match_url)
+    if response.status_code == 200:
+        all_matches.extend(response.json())
+    # ... [Your existing loop that ends with: all_matches.extend(response.json())] ...
+
+# Convert the array of matches into a Pandas DataFrame
+df_matches = pd.json_normalize(all_matches)
+
+# Standardize the column formatting to make it MySQL friendly
+df_matches.columns = [col.replace('.', '_') for col in df_matches.columns]
+
+# --- SERIALIZATION FIX ---
+# Find columns containing complex types (lists or dictionaries) and convert them to JSON strings
+for col in df_matches.columns:
+    if df_matches[col].apply(lambda x: isinstance(x, (list, dict))).any():
+        df_matches[col] = df_matches[col].apply(lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x)
+
+# Ensure no duplicate entries are sent to the database
+df_matches = df_matches.drop_duplicates(subset=['match_id'])
+
+# Write the final structured match list directly to your local MySQL table
+df_matches.to_sql('matches', con=engine, if_exists='append', index=False)
+print(f"Stored {len(df_matches)} unique matches successfully.")
+
+# --- STEP 3C: STREAM LINEUPS AND EVENTS GAME-BY-GAME ---
+print("Streaming Lineups and Events (Game-by-Game)...")
+total_games = len(df_matches)
+
+for idx, match_id in enumerate(df_matches['match_id'].unique()):
+    m_id = str(match_id)
+    
+    if idx % 20 == 0 and idx > 0:
+        print(f"Progress: {idx}/{total_games} matches securely processed...")
+
+    # Stream Lineups
+    lineup_url = f"{GITHUB_BASE}lineups/{m_id}.json"
+    l_res = requests.get(lineup_url)
+    if l_res.status_code == 200 and l_res.json():
+        df_lineups = pd.json_normalize(l_res.json(), record_path=['lineup'], meta=['team_id', 'team_name'])
+        df_lineups['match_id'] = int(m_id)
+        df_lineups.columns = [col.replace('.', '_') for col in df_lineups.columns]
+        df_lineups.to_sql('lineups', con=engine, if_exists='append', index=False)
+
+    # Stream Events
+    event_url = f"{GITHUB_BASE}events/{m_id}.json"
+    e_res = requests.get(event_url)
+    if e_res.status_code == 200 and e_res.json():
+        # Process using the hybrid schema framework
+        df_events = process_events_hybrid(e_res.json(), m_id)
+        
+        # Enforce JSON data type definition on initial generation
+        if idx == 0:
+            df_events.to_sql('events', con=engine, if_exists='append', index=False, 
+                              dtype={'metadata_blob': text("JSON")})
+        else:
+            df_events.to_sql('events', con=engine, if_exists='append', index=False)
+
+print("✅ Data Pipeline complete! All events successfully loaded.")
