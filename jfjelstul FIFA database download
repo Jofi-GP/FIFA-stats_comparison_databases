@@ -59,11 +59,11 @@ sqlite_conn = sqlite3.connect(full_path)
 tables_df = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table';", sqlite_conn)
 table_names = tables_df['name'].tolist()
 
-# 2. Configure your MySQL connection credentials
+# 2. Configure your MySQL connection credentials (I deleted mine for obvious reasons)
 MYSQL_USER = "root"
 MYSQL_PASS = "yourpassword"  
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = "3306"
+MYSQL_HOST = "xxx.x.x.x"
+MYSQL_PORT = "xxxx"
 
 # Encode credentials safely for the connection URL
 encoded_pass = urllib.parse.quote_plus(MYSQL_PASS)
