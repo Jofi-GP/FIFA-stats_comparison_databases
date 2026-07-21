@@ -3,121 +3,121 @@
 -- Following the order of the datasets for creating primary and foreign keys:
 
 -- group 1:
--- tournaments
--- confederations
--- teams
--- players
--- managers
--- referees
--- stadiums
--- matches
--- awards
+-- tournaments  
+-- confederations  
+-- teams  
+-- players  
+-- managers  
+-- referees  
+-- stadiums  
+-- matches  
+-- awards  
 
--- group 2:
--- qualified_teams
--- squads
--- manager_appointments
--- referee_appointments
+-- group 2:  
+-- qualified_teams  
+-- squads  
+-- manager_appointments  
+-- referee_appointments  
 
--- group 3:
--- team_appearances
--- player_appearances
--- manager_appearances
--- referee_appearances
+-- group 3:  
+-- team_appearances  
+-- player_appearances  
+-- manager_appearances  
+-- referee_appearances  
+  
+-- group 4:  
+-- goals  
+-- penalty_kicks  
+-- bookings  
+-- substitutions  
 
--- group 4:
--- goals
--- penalty_kicks
--- bookings
--- substitutions
+-- group 5:  
+-- host_countries  
+-- tournament_stages  
+-- groups  
+-- group_standings  
+-- tournament_standings  
+-- award_winners  
 
--- group 5:
--- host_countries
--- tournament_stages
--- groups
--- group_standings
--- tournament_standings
--- award_winners
+-- start by dropping all of the tables without primary keys  
+-- group 2:  
+DROP TABLE IF EXISTS qualified_teams;  
+DROP TABLE IF EXISTS squads;  
+DROP TABLE IF EXISTS manager_appointments;  
+DROP TABLE IF EXISTS referee_appointments;  
 
--- start by dropping all of the tables without primary keys
--- group 2:
-DROP TABLE IF EXISTS qualified_teams;
-DROP TABLE IF EXISTS squads;
-DROP TABLE IF EXISTS manager_appointments;
-DROP TABLE IF EXISTS referee_appointments;
+-- group 3:  
+DROP TABLE IF EXISTS team_appearances;  
+DROP TABLE IF EXISTS player_appearances;  
+DROP TABLE IF EXISTS manager_appearances;  
+DROP TABLE IF EXISTS referee_appearances;  
 
--- group 3:
-DROP TABLE IF EXISTS team_appearances;
-DROP TABLE IF EXISTS player_appearances;
-DROP TABLE IF EXISTS manager_appearances;
-DROP TABLE IF EXISTS referee_appearances;
+-- group 5:  
+DROP TABLE IF EXISTS host_countries;  
+DROP TABLE IF EXISTS tournament_stages;  
+DROP TABLE IF EXISTS groups;  
+DROP TABLE IF EXISTS group_standings;  
+DROP TABLE IF EXISTS tournament_standings;  
+DROP TABLE IF EXISTS award_winners;  
 
--- group 5:
-DROP TABLE IF EXISTS host_countries;
-DROP TABLE IF EXISTS tournament_stages;
-DROP TABLE IF EXISTS groups;
-DROP TABLE IF EXISTS group_standings;
-DROP TABLE IF EXISTS tournament_standings;
-DROP TABLE IF EXISTS award_winners;
+-- then drop tables with primary keys but without dependencies  
+-- group 4:  
+DROP TABLE IF EXISTS goals;  
+DROP TABLE IF EXISTS penalty_kicks;  
+DROP TABLE IF EXISTS bookings;  
+DROP TABLE IF EXISTS substitutions;  
 
--- then drop tables with primary keys but without dependencies
--- group 4:
-DROP TABLE IF EXISTS goals;
-DROP TABLE IF EXISTS penalty_kicks;
-DROP TABLE IF EXISTS bookings;
-DROP TABLE IF EXISTS substitutions;
+-- then drop tables with primary keys and dependencies in reverse order  
+-- group 1:  
+DROP TABLE IF EXISTS awards;  
+DROP TABLE IF EXISTS matches;  
+DROP TABLE IF EXISTS stadiums;  
+DROP TABLE IF EXISTS referees;  
+DROP TABLE IF EXISTS managers;  
+DROP TABLE IF EXISTS players;  
+DROP TABLE IF EXISTS teams;  
+DROP TABLE IF EXISTS confederations;  
+DROP TABLE IF EXISTS tournaments;  
 
--- then drop tables with primary keys and dependencies in reverse order
--- group 1:
-DROP TABLE IF EXISTS awards;
-DROP TABLE IF EXISTS matches;
-DROP TABLE IF EXISTS stadiums;
-DROP TABLE IF EXISTS referees;
-DROP TABLE IF EXISTS managers;
-DROP TABLE IF EXISTS players;
-DROP TABLE IF EXISTS teams;
-DROP TABLE IF EXISTS confederations;
-DROP TABLE IF EXISTS tournaments;
+-- tournaments  
+-- one record per tournament  
+CREATE TABLE tournaments(  
+  tournament_id TEXT NOT NULL,  
+  tournament_name TEXT,  
+  year INTEGER,  
+  start_date DATE,  
+  end_date DATE,  
+  host_country TEXT,  
+  winner TEXT,  
+  host_won BOOLEAN,  
+  count_teams INTEGER,  
+  group_stage BOOLEAN,  
+  second_group_stage BOOLEAN,  
+  final_round BOOLEAN,  
+  round_of_16 BOOLEAN,  
+  quarter_finals BOOLEAN,  
+  semi_finals BOOLEAN,  
+  third_place_match BOOLEAN,  
+  final BOOLEAN,  
+  PRIMARY KEY (tournament_id)  
+);  
 
--- tournaments
--- one record per tournament
-CREATE TABLE tournaments(
-  tournament_id TEXT NOT NULL,
-  tournament_name TEXT,
-  year INTEGER,
-  start_date DATE,
-  end_date DATE,
-  host_country TEXT,
-  winner TEXT,
-  host_won BOOLEAN,
-  count_teams INTEGER,
-  group_stage BOOLEAN,
-  second_group_stage BOOLEAN,
-  final_round BOOLEAN,
-  round_of_16 BOOLEAN,
-  quarter_finals BOOLEAN,
-  semi_finals BOOLEAN,
-  third_place_match BOOLEAN,
-  final BOOLEAN,
-  PRIMARY KEY (tournament_id)
-);
+-- confederations  
+-- one record per confederation  
+CREATE TABLE confederations(  
+  confederation_id TEXT NOT NULL,  
+  confederation_name TEXT,  
+  confederation_code TEXT,  
+  confederation_wikipedia_link TEXT,  
+  PRIMARY KEY (confederation_id)  
+);  
 
--- confederations
--- one record per confederation
-CREATE TABLE confederations(
-  confederation_id TEXT NOT NULL,
-  confederation_name TEXT,
-  confederation_code TEXT,
-  confederation_wikipedia_link TEXT,
-  PRIMARY KEY (confederation_id)
-);
-
--- teams
--- one record per team
-CREATE TABLE teams(
-  team_id TEXT NOT NULL,
-  team_name TEXT,
-  team_code TEXT,
+-- teams  
+-- one record per team  
+CREATE TABLE teams(  
+  team_id TEXT NOT NULL,  
+  team_name TEXT,  
+  team_code TEXT,  
   mens_team BOOLEAN,
   womens_team BOOLEAN,
   federation_name TEXT,
