@@ -1,0 +1,267 @@
+-- @misc{md_mominul_islam_2026,
+--	title={FIFA World Cup 2026 - Live Results &amp; Updated Stats},
+--	url={https://www.kaggle.com/dsv/18205692},
+--	DOI={10.34740/KAGGLE/DSV/18205692},
+--	publisher={Kaggle},
+--	author={MD Mominul Islam},
+--	year={2026}
+--}
+
+#---------------------------------------------------------------------------------------------------------------------------------
+import os
+import pandas as pd
+import kagglehub
+
+# Download latest version and read the tables included
+path = kagglehub.dataset_download("mominullptr/fifa-world-cup-2026-dataset")
+print("Path to dataset files:", path)
+
+df_matches = pd.read_csv(os.path.join(path, "matches.csv"))
+df_teams = pd.read_csv(os.path.join(path, "teams.csv"))
+df_stages = pd.read_csv(os.path.join(path, "tournament_stages.csv"))
+df_lineups = pd.read_csv(os.path.join(path, "match_lineups.csv"))
+df_player_stats = pd.read_csv(os.path.join(path, "player_stats.csv"))
+
+print('matches',df_matches)
+print('teams', df_teams)
+print('tournament stages', df_stages)
+print('match lineups', df_lineups)
+print('player stats', df_player_stats)
+----------------------------------------------------------------------------------------------------------------------------------
+# 2. Point pandas directly to the kagglehub local folder paths using 'path'
+players_path = os.path.join(path, "squads_and_players.csv")
+stats_path = os.path.join(path, "player_stats.csv")
+teams_path = os.path.join(path, "teams.csv")
+
+print("\n Loading World Cup 2026 tables into memory...")
+df_players = pd.read_csv(players_path)
+df_stats = pd.read_csv(stats_path)
+df_teams = pd.read_csv(teams_path)
+
+print("Aggregating player statistics...")
+#----------------------------------------------------------------------------------------------------------------------------------
+# 3. Combine player metadata with tournament statistics
+player_profile = pd.merge(
+    df_stats, 
+    df_players[['player_id', 'club_team']], 
+    on='player_id', 
+    how='inner'
+)
+player_profile = pd.merge(
+    player_profile, 
+    df_teams[['team_id', 'team_name']], 
+    on='team_id', 
+    how='inner'
+)
+# 4. Compute normalized Per-90 metrics
+player_profile['90s_played'] = player_profile['minutes_played'] / 90.0
+
+# Filter for a reliable playing time sample size (minimum 180 minutes / 2 full games)
+filtered_scout = player_profile[player_profile['minutes_played'] >= 180].copy()
+
+# Calculate Per 90 metrics using the dataset's native tracking columns
+filtered_scout['goals_per_90'] = filtered_scout['goals'] / filtered_scout['90s_played']
+filtered_scout['assists_per_90'] = filtered_scout['assists'] / filtered_scout['90s_played']
+filtered_scout['cards_per_90'] = (filtered_scout['yellow_cards'] + filtered_scout['red_cards']) / filtered_scout['90s_played']
+
+print("METRICS COMPLETELY CALCULATED SUCCESSFULLY!")
+
+print("\n TOP 5 ATTACKERS IN WC 2026 (Goals per 90):")
+print(filtered_scout.sort_values(by='goals_per_90', ascending=False)[['player_name', 'team_name', 'goals_per_90']].head(5).to_string(index=False))
+print("\n TOP 5 CREATORS IN WC 2026 (Assists per 90):")
+print(filtered_scout.sort_values(by='assists_per_90', ascending=False)[['player_name', 'team_name', 'assists_per_90']].head(5).to_string(index=False))
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+-- Which are the best players of the tournament?
+
+# 1. Merge player stats with team metadata for readable names
+total_profile = pd.merge(
+    df_stats, 
+    df_teams[['team_id', 'team_name']], 
+    on='team_id', 
+    how='inner'
+)
+
+# 2. Create a combined metric for Total Goal Involvements (Non-penalty Goals + Assists)
+total_profile['total_contributions'] = total_profile['goals'] + total_profile['assists']
+
+print("TOURNAMENT CUMULATIVE STATS COMPLETED!")
+
+print("GOLDEN BOOT LEADERS (Most Total Goals):")
+gold_boot_cols = ['player_name', 'team_name', 'goals', 'assists', 'minutes_played']
+print(total_profile.sort_values(by=['goals', 'assists', 'minutes_played'], ascending=[False, False, True])[gold_boot_cols].head(10).to_string(index=False))
+
+print("\n TOURNAMENT CREATION LEADERS (Most Total Assists):")
+assist_cols = ['player_name', 'team_name', 'assists', 'minutes_played']
+print(total_profile.sort_values(by=['assists', 'minutes_played'], ascending=[False, True])[assist_cols].head(10).to_string(index=False))
+
+print("\n MOST TOTAL GOAL CONTRIBUTIONS (Goals + Assists):")
+impact_cols = ['player_name', 'team_name', 'total_contributions', 'goals', 'assists']
+print(total_profile.sort_values(by='total_contributions', ascending=False)[impact_cols].head(10).to_string(index=False))
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+-- Now measuring teams performance by computing goals scored, goals taken, yellow and red cards, average minutes played per match and stage reached
+
+# 1. Step A: Process match-by-match metrics (Goals and Minutes)
+for _, team in df_teams.iterrows():
+    t_id = team['team_id']
+    t_name = team['team_name']
+    
+    # Filter matches where this team played
+    home_games = df_matches[df_matches['home_team_id'] == t_id]
+    away_games = df_matches[df_matches['away_team_id'] == t_id]
+    all_games = pd.concat([home_games, away_games])
+    
+    total_games = len(all_games)
+    if total_games == 0:
+        continue
+        
+    # Calculate exact goals scored and conceded
+    goals_scored = home_games['home_score'].sum() + away_games['away_score'].sum()
+    goals_taken = home_games['away_score'].sum() + away_games['home_score'].sum()
+    
+    # Identify the highest stage reached
+    last_game = all_games.sort_values(by='date').iloc[-1]
+    stage_id = last_game['stage_id']
+    stage_name = df_stages[df_stages['stage_id'] == stage_id]['stage_name'].values[0]
+    
+    # Calculate average match duration
+    involved_match_ids = all_games['match_id'].tolist()
+    team_lineups = df_lineups[(df_lineups['match_id'].isin(involved_match_ids)) & (df_lineups['team_id'] == t_id)]
+    match_durations = team_lineups.groupby('match_id')['minutes_played'].max()
+    avg_time = match_durations.mean() if not match_durations.empty else 90.0
+    
+    team_results.append({
+        'team_id': t_id,
+        'Country': t_name,
+        'Games Played': total_games,
+        'Goals Scored': goals_scored,
+        'Goals Taken': goals_taken,
+        'Avg Mins Per Match': round(avg_time, 1),
+        'Final Stage Reached': stage_name
+    })
+
+df_base_summary = pd.DataFrame(team_results)
+
+# 2. Step B: Calculate Cards For directly from your tournament totals
+print("Merging verified team card metrics...")
+
+# Dynamically find whatever card columns exist in your player_stats table to avoid KeyErrors
+yellow_col = [c for c in df_player_stats.columns if 'yellow' in c.lower() or 'yc' in c.lower()][0]
+red_col = [c for c in df_player_stats.columns if 'red' in c.lower() or 'rc' in c.lower()][0]
+
+# Sum up player cards by team to get true total cards received BY each country
+team_own_cards = df_player_stats.groupby('team_id')[[yellow_col, red_col]].sum().reset_index()
+team_own_cards.rename(columns={yellow_col: 'Yellow Cards For', red_col: 'Red Cards For'}, inplace=True)
+
+# 5. Final Join: Merge your match data with your cards table
+df_team_summary = pd.merge(df_base_summary, team_own_cards, on='team_id', how='inner')
+
+# Clean up structural ID column for a beautiful output
+df_team_summary.drop(columns=['team_id'], inplace=True)
+
+print("Complete team performance table compiled successfully!")
+
+# Sort rows by Games Played, then break ties using Goals Scored
+df_display = df_team_summary.sort_values(by=['Games Played', 'Goals Scored'], ascending=[False, False])
+display(df_display)
+
+#------------------------------------------------------------------------------------------------------------------------------------------
+
+#---TRACK DETAILS OF RED CARDS---
+# 1. Create a quick dictionary lookup to map team IDs to names easily
+team_name_lookup = dict(zip(df_teams['team_id'], df_teams['team_name']))
+
+# 3. Standardize event columns to lowercase to prevent naming errors
+df_events.columns = df_events.columns.str.lower()
+
+# Isolate all red card events across the tournament in a single fast filter
+# (Looks for "red card" or "second yellow" inside your event types)
+df_red_card_events = df_events[df_events['event_type'].astype(str).str.lower().str.contains('red|second', na=False)]
+
+# 3. Process match-by-match metrics
+for _, team in df_teams.iterrows():
+    t_id = team['team_id']
+    t_name = team['team_name']
+    
+    # Filter matches where this team played
+    home_games = df_matches[df_matches['home_team_id'] == t_id]
+    away_games = df_matches[df_matches['away_team_id'] == t_id]
+    all_games = pd.concat([home_games, away_games])
+    
+    total_games = len(all_games)
+    if total_games == 0:
+        continue
+        
+    # Calculate exact goals scored and conceded
+    goals_scored = home_games['home_score'].sum() + away_games['away_score'].sum()
+    goals_taken = home_games['away_score'].sum() + away_games['home_score'].sum()
+    
+    # Identify the highest stage reached
+    last_game = all_games.sort_values(by='date').iloc[-1]
+    stage_id = last_game['stage_id']
+    stage_name = df_stages[df_stages['stage_id'] == stage_id]['stage_name'].values[0]
+    
+    # Calculate average match duration
+    involved_match_ids = all_games['match_id'].tolist()
+    team_lineups = df_lineups[(df_lineups['match_id'].isin(involved_match_ids)) & (df_lineups['team_id'] == t_id)]
+    match_durations = team_lineups.groupby('match_id')['minutes_played'].max()
+    avg_time = match_durations.mean() if not match_durations.empty else 90.0
+    
+    # ---TRACK RED CARD OPPONENTS VIA EVENTS TABLE ---
+    red_card_opponents = []
+    
+    # Filter red cards received specifically BY this team's player_id or team_id in their matches
+    # (Using team_id from the events stream matches your current loop structure)
+    team_red_events = df_red_card_events[(df_red_card_events['match_id'].isin(involved_match_ids)) & (df_red_card_events['team_id'] == t_id)]
+    
+    for _, event in team_red_events.iterrows():
+        m_id = event['match_id']
+        
+        # Look up the match details to find who they were playing against
+        match_info = df_matches[df_matches['match_id'] == m_id].iloc[0]
+        
+        if match_info['home_team_id'] == t_id:
+            opp_id = match_info['away_team_id']
+        else:
+            opp_id = match_info['home_team_id']
+            
+        opp_name = team_name_lookup.get(opp_id, "Unknown Opponent")
+        red_card_opponents.append(opp_name)
+        
+    # Format the array list into a clean text string string
+    if red_card_opponents:
+        red_opp_string = ", ".join(list(set(red_card_opponents))) # removes duplicates if multiple reds in a match
+    else:
+        red_opp_string = "None"
+    # --------------------------------------------------------
+    
+    team_results.append({
+        'team_id': t_id,
+        'Country': t_name,
+        'Games Played': total_games,
+        'Goals Scored': goals_scored,
+        'Goals Taken': goals_taken,
+        'Avg Mins Per Match': round(avg_time, 1),
+        'Final Stage Reached': stage_name,
+        'Red Card Opponents': red_opp_string  
+    })
+
+df_base_summary = pd.DataFrame(team_results)
+
+# 4. Calculate Cards For directly from your tournament totals
+print("Merging verified team card metrics...")
+yellow_col = [c for c in df_player_stats.columns if 'yellow' in c.lower() or 'yc' in c.lower()][0]
+red_col = [c for c in df_player_stats.columns if 'red' in c.lower() or 'rc' in c.lower()][0]
+
+team_own_cards = df_player_stats.groupby('team_id')[[yellow_col, red_col]].sum().reset_index()
+team_own_cards.rename(columns={yellow_col: 'Yellow Cards For', red_col: 'Red Cards For'}, inplace=True)
+
+# 5. Final Join
+df_team_summary = pd.merge(df_base_summary, team_own_cards, on='team_id', how='inner')
+df_team_summary.drop(columns=['team_id'], inplace=True)
+
+print("Complete team performance table compiled with red card opponent histories")
+# Display teams who received red cards and call out their opponents
+df_discipline_report = df_team_summary[df_team_summary['Red Cards For'] > 0]
+display(df_discipline_report[['Country', 'Red Cards For', 'Red Card Opponents', 'Final Stage Reached']])
