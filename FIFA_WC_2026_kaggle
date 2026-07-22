@@ -151,6 +151,53 @@ print(total_profile.sort_values(by=['assists', 'minutes_played'], ascending=[Fal
 print("\n MOST TOTAL GOAL CONTRIBUTIONS (Goals + Assists):")
 impact_cols = ['player_name', 'team_name', 'total_contributions', 'goals', 'assists']
 print(total_profile.sort_values(by='total_contributions', ascending=False)[impact_cols].head(10).to_string(index=False))
+#-------------------------------------------------------------------------------------------------------------------------
+#-- CHECKING VAR METRICS
+
+# 1. Define paths
+base_path = r"C:\Users\Josefina\.cache\kagglehub\datasets\mominullptr\fifa-world-cup-2026-dataset\versions\71"
+events_path = os.path.join(base_path, "match_events.csv")
+players_path = os.path.join(base_path, "squads_and_players.csv")
+teams_path = os.path.join(base_path, "teams.csv")
+
+# 2. Load dataframes
+df_events = pd.read_csv(events_path)
+df_players = pd.read_csv(players_path)
+df_teams = pd.read_csv(teams_path)
+
+# 3. Clean 'minute' column to handle stoppage time strings (e.g., '90+6') safely
+def clean_stoppage_time(val):
+    if pd.isna(val): return 0
+    val_str = str(val).strip()
+    if '+' in val_str:
+        return sum(int(p.strip()) for p in val_str.split('+') if p.strip().isdigit())
+    digits = ''.join(c for c in val_str if c.isdigit())
+    return int(digits) if digits else 0
+
+df_events['minute'] = df_events['minute'].apply(clean_stoppage_time)
+
+# 4. Search for any row containing "var", "review", or "decision"
+var_search = df_events[df_events['event_type'].astype(str).str.lower().str.contains('var|review|decision|overturn', na=False)].copy()
+
+# 5. Join 1: Map player_id to player_name (using unique player subset)
+df_players_unique = df_players[['player_id', 'player_name']].drop_duplicates(subset=['player_id'])
+var_search = pd.merge(var_search, df_players_unique, on='player_id', how='left')
+var_search['player_name'] = var_search['player_name'].fillna('No Specific Player')
+
+# 6. Join 2: Map team_id to team_name
+df_teams_unique = df_teams[['team_id', 'team_name']].drop_duplicates(subset=['team_id'])
+var_search = pd.merge(var_search, df_teams_unique, on='team_id', how='left')
+var_search['team_name'] = var_search['team_name'].fillna('No Specific Team')
+
+# 7. Select, reorder, and present the final display columns (dropping the raw IDs)
+final_columns = ['event_id', 'match_id', 'minute', 'event_type', 'team_name', 'player_name']
+df_final_display = var_search[final_columns]
+
+print(f"--- SEARCH RESULTS: Found {len(df_final_display)} rows ---")
+if not df_final_display.empty:
+    display(df_final_display)
+else:
+    print("No explicit VAR mentions found in the event text.")
 
 # ----------------------------------------------------------------------------
 # ---STEP 3: ANALYZING TEAMS PERFORMANCE---
@@ -423,9 +470,7 @@ df_discipline_report = df_team_summary[df_team_summary['Yellow Cards For'] > 0].
     ascending=False
 )
 
-# --- CHECK VAR METRICS ----
-# Display the sorted report
-display(df_discipline_report[['Country', 'Yellow Cards For', 'Yellow Card Opponents', 'Final Stage Reached']])
+#---TEAMS VAR REVISED ACTIONS PER MATCH---
 
 # 1. Define paths
 base_path = r"C:\Users\Josefina\.cache\kagglehub\datasets\mominullptr\fifa-world-cup-2026-dataset\versions\71"
@@ -447,7 +492,7 @@ def clean_stoppage_time(val):
 
 df_events['minute'] = df_events['minute'].apply(clean_stoppage_time)
 
-# 3. Group all events by match and minute, combining event names into a text string
+# 3. CRITICAL UPDATE: Group all events by match and minute, combining event names into a text string
 df_minute_events = df_events.groupby(['match_id', 'minute'])['event_type'].apply(lambda x: " + ".join(x)).reset_index()
 
 # 4. Filter for minutes that contain a VAR keyword
