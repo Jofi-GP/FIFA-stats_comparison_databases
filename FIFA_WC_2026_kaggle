@@ -12,22 +12,75 @@ import os
 import pandas as pd
 import kagglehub
 
+# ---STEP 1: INITIATE & DOWNLOAD DATABASE AND CHECK INTEGRITY--------------------
+# -------------------------------------------------------------------------------
 # Download latest version and read the tables included
 path = kagglehub.dataset_download("mominullptr/fifa-world-cup-2026-dataset")
 print("Path to dataset files:", path)
 
-df_matches = pd.read_csv(os.path.join(path, "matches.csv"))
-df_teams = pd.read_csv(os.path.join(path, "teams.csv"))
-df_stages = pd.read_csv(os.path.join(path, "tournament_stages.csv"))
-df_lineups = pd.read_csv(os.path.join(path, "match_lineups.csv"))
-df_player_stats = pd.read_csv(os.path.join(path, "player_stats.csv"))
+# # List all files in the downloaded directory
+files = os.listdir(path)
+print("Files in dataset:", files)
 
-print('matches',df_matches)
-print('teams', df_teams)
-print('tournament stages', df_stages)
-print('match lineups', df_lineups)
-print('player stats', df_player_stats)
-----------------------------------------------------------------------------------------------------------------------------------
+# Expand pandas display limits (from your previous question)
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_colwidth', None)
+
+# Loop through every file in the directory
+for file_name in os.listdir(path):
+    # Only process CSV files
+    if file_name.endswith('.csv'):
+        file_path = os.path.join(path, file_name)
+        df = pd.read_csv(file_path)
+        
+        print("=" * 50)
+        print(f"TABLE NAME: {file_name}")
+        print(f"Dimensions: {df.shape[0]} rows, {df.shape[1]} columns")
+        print("-" * 50)
+        
+        # Print a clean list of all columns
+        print("Columns List:")
+        print(df.columns.tolist())
+        print("-" * 50)
+        
+        # Show a vertical sample of the first row (great for wide tables)
+        print("Sample Data (First Row Transposed):")
+        print(df.head(1).T)
+        print("\n" + "=" * 50 + "\n")
+
+# Deep search for CSVs if the dataset has nested folders
+for root, dirs, files in os.walk(path):
+    for file in files:
+        if file.endswith('.csv'):
+            full_path = os.path.join(root, file)
+            df = pd.read_csv(full_path)
+            print(f"Loaded nested file: {file} with shape {df.shape}")
+
+print('--TESTING DATABASE INTEGRITY-----')
+print('-' *50)
+# Check if any rows have broken or blank event details
+print("Missing values per column:")
+print(df_events.isna().sum())
+
+# Look for blank strings or spaces
+corrupted_strings = df_events[df_events['event_type'].astype(str).str.strip() == ""]
+print(f"Blank event text rows: {len(corrupted_strings)}")
+
+# Find any row where the minute column contains corrupted non-numeric text strings
+corrupted_minutes = df_events[~df_events['minute'].astype(str).str.match(r'^\d+(\+\d+)?$')]
+if not corrupted_minutes.empty:
+    print("⚠️ Found corrupted row formatting:")
+    display(corrupted_minutes)
+else:
+    print("File structure is perfect. No misaligned columns found.")
+
+# Check for orphan rows caused by data loss
+orphan_events = df_events[~df_events['match_id'].isin(df_details['match_id'])]
+print(f"Orphaned event rows with missing match info: {len(orphan_events)}")
+
+# ----------------------------------------------------------------------------
+# ---STEP 2: ANALYZING INDIVIDUAL PLAYER PERFORMANCE---
+# -----------------------------------------------------------------------------
 # 2. Point pandas directly to the kagglehub local folder paths using 'path'
 players_path = os.path.join(path, "squads_and_players.csv")
 stats_path = os.path.join(path, "player_stats.csv")
@@ -99,8 +152,10 @@ print("\n MOST TOTAL GOAL CONTRIBUTIONS (Goals + Assists):")
 impact_cols = ['player_name', 'team_name', 'total_contributions', 'goals', 'assists']
 print(total_profile.sort_values(by='total_contributions', ascending=False)[impact_cols].head(10).to_string(index=False))
 
-#----------------------------------------------------------------------------------------------------------------------------------------------------
--- Now measuring teams performance by computing goals scored, goals taken, yellow and red cards, average minutes played per match and stage reached
+# ----------------------------------------------------------------------------
+# ---STEP 3: ANALYZING TEAMS PERFORMANCE---
+# ----------------------------------------------------------------------------
+-- Measuring teams performance by computing goals scored, goals taken, yellow and red cards, average minutes played per match and stage reached
 
 # 1. Step A: Process match-by-match metrics (Goals and Minutes)
 for _, team in df_teams.iterrows():
@@ -265,3 +320,152 @@ print("Complete team performance table compiled with red card opponent histories
 # Display teams who received red cards and call out their opponents
 df_discipline_report = df_team_summary[df_team_summary['Red Cards For'] > 0]
 display(df_discipline_report[['Country', 'Red Cards For', 'Red Card Opponents', 'Final Stage Reached']])
+
+#---TRACK DETAILS OF YELLOW CARDS---
+# Create a quick dictionary lookup to map team IDs to names easily
+team_name_lookup = dict(zip(df_teams['team_id'], df_teams['team_name']))
+
+# Standardize event columns to lowercase to prevent naming errors
+df_events.columns = df_events.columns.str.lower()
+
+# Isolate all yellow card events across the tournament in a single fast filter
+# (Looks for "yellow card" inside your event types)
+df_yellow_card_events = df_events[df_events['event_type'].astype(str).str.lower().str.contains('yellow', na=False)]
+
+team_results = []
+
+# 3. Process match-by-match metrics
+for _, team in df_teams.iterrows():
+    t_id = team['team_id']
+    t_name = team['team_name']
+    
+    # Filter matches where this team played
+    home_games = df_matches[df_matches['home_team_id'] == t_id]
+    away_games = df_matches[df_matches['away_team_id'] == t_id]
+    all_games = pd.concat([home_games, away_games])
+    
+    total_games = len(all_games)
+    if total_games == 0:
+        continue
+        
+    # Calculate exact goals scored and conceded
+    goals_scored = home_games['home_score'].sum() + away_games['away_score'].sum()
+    goals_taken = home_games['away_score'].sum() + away_games['home_score'].sum()
+    
+    # Identify the highest stage reached
+    last_game = all_games.sort_values(by='date').iloc[-1]
+    stage_id = last_game['stage_id']
+    stage_name = df_stages[df_stages['stage_id'] == stage_id]['stage_name'].values[0]
+    
+    # Calculate average match duration
+    involved_match_ids = all_games['match_id'].tolist()
+    team_lineups = df_lineups[(df_lineups['match_id'].isin(involved_match_ids)) & (df_lineups['team_id'] == t_id)]
+    match_durations = team_lineups.groupby('match_id')['minutes_played'].max()
+    avg_time = match_durations.mean() if not match_durations.empty else 90.0
+    
+    # --- TRACK YELLOW CARD OPPONENTS VIA EVENTS TABLE ---
+    yellow_card_opponents = []
+    
+    # Filter red cards received specifically BY this team's player_id or team_id in their matches
+    # (Using team_id from the events stream matches your current loop structure)
+    team_yellow_events = df_yellow_card_events[(df_yellow_card_events['match_id'].isin(involved_match_ids)) & (df_yellow_card_events['team_id'] == t_id)]
+    
+    for _, event in team_yellow_events.iterrows():
+        m_id = event['match_id']
+        
+        # Look up the match details to find who they were playing against
+        match_info = df_matches[df_matches['match_id'] == m_id].iloc[0]
+        
+        if match_info['home_team_id'] == t_id:
+            opp_id = match_info['away_team_id']
+        else:
+            opp_id = match_info['home_team_id']
+            
+        opp_name = team_name_lookup.get(opp_id, "Unknown Opponent")
+        yellow_card_opponents.append(opp_name)
+
+     # We use set() to remove duplicate team entries if they got multiple yellow cards in one game.
+    if yellow_card_opponents:
+        yellow_opp_string = ", ".join(sorted(list(set(yellow_card_opponents))))
+    else:
+        yellow_opp_string = "None" # Prevents leaking older data or showing NaN
+        
+   # --------------------------------------------------------
+    
+    team_results.append({
+        'team_id': t_id,
+        'Country': t_name,
+        'Games Played': total_games,
+        'Goals Scored': goals_scored,
+        'Goals Taken': goals_taken,
+        'Avg Mins Per Match': round(avg_time, 1),
+        'Final Stage Reached': stage_name,
+        'Yellow Card Opponents': yellow_opp_string  
+    })
+
+df_base_summary = pd.DataFrame(team_results)
+
+# 4. Step B: Calculate Cards For directly from your tournament totals
+print("🟨 Merging verified team card metrics...")
+yellow_col = [c for c in df_player_stats.columns if 'yellow' in c.lower() or 'yc' in c.lower()][0]
+
+team_own_cards = df_player_stats.groupby('team_id')[[yellow_col]].sum().reset_index()
+team_own_cards.rename(columns={yellow_col: 'Yellow Cards For'}, inplace=True)
+
+# 5. Final Join
+df_team_summary = pd.merge(df_base_summary, team_own_cards, on='team_id', how='inner')
+df_team_summary.drop(columns=['team_id'], inplace=True)
+
+print("✅ Complete team performance table compiled with yellow card opponent histories!")
+# Filter teams with yellow cards and sort them from highest to lowest
+df_discipline_report = df_team_summary[df_team_summary['Yellow Cards For'] > 0].sort_values(
+    by='Yellow Cards For', 
+    ascending=False
+)
+
+# --- CHECK VAR METRICS ----
+# Display the sorted report
+display(df_discipline_report[['Country', 'Yellow Cards For', 'Yellow Card Opponents', 'Final Stage Reached']])
+
+# 1. Define paths
+base_path = r"C:\Users\Josefina\.cache\kagglehub\datasets\mominullptr\fifa-world-cup-2026-dataset\versions\71"
+events_path = os.path.join(base_path, "match_events.csv")
+details_path = os.path.join(base_path, "matches_detailed.csv")
+
+# 2. Load dataframes
+df_events = pd.read_csv(events_path)
+df_details = pd.read_csv(details_path)
+
+# 2b. Clean 'minute' column to handle stoppage time strings (e.g., '90+6') safely
+def clean_stoppage_time(val):
+    if pd.isna(val): return 0
+    val_str = str(val).strip()
+    if '+' in val_str:
+        return sum(int(p.strip()) for p in val_str.split('+') if p.strip().isdigit())
+    digits = ''.join(c for c in val_str if c.isdigit())
+    return int(digits) if digits else 0
+
+df_events['minute'] = df_events['minute'].apply(clean_stoppage_time)
+
+# 3. Group all events by match and minute, combining event names into a text string
+df_minute_events = df_events.groupby(['match_id', 'minute'])['event_type'].apply(lambda x: " + ".join(x)).reset_index()
+
+# 4. Filter for minutes that contain a VAR keyword
+df_var_minutes = df_minute_events[df_minute_events['event_type'].str.lower().str.contains('var|review|decision|overturn', na=False)].copy()
+
+# 5. Filter columns from matches_detailed to keep it clean
+match_info = df_details[['match_id', 'date', 'stadium_name', 'home_team_name', 'away_team_name']]
+
+# 6. Perform the join on 'match_id' to append metadata
+df_var_report = pd.merge(df_var_minutes, match_info, on='match_id', how='inner')
+
+# 7. Create the "Team1 vs Team2" combination column
+df_var_report['Matchup'] = df_var_report['home_team_name'] + " vs " + df_var_report['away_team_name']
+
+# 8. Select, reorder, and sort rows cleanly for display
+final_columns = ['match_id', 'Matchup', 'date', 'stadium_name', 'minute', 'event_type']
+df_var_report = df_var_report[final_columns].sort_values(by=['date', 'minute'], ascending=[False, False])
+
+# Display your results
+print(f"Successfully mapped {len(df_var_report)} minutes with VAR interventions!")
+display(df_var_report)
