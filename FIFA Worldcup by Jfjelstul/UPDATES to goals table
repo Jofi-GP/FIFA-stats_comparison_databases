@@ -1,0 +1,22 @@
+UPDATE goals 
+SET minute_label = 
+    CASE 
+        -- Case 1: Handles extra-time strings with appended remarks (e.g., "120'+1' (penalty.)")
+        WHEN minute_label LIKE "%'+%" THEN
+            CAST(SUBSTRING_INDEX(minute_label, "'+", 1) AS UNSIGNED) + 
+            CAST(SUBSTRING_INDEX(REPLACE(SUBSTRING_INDEX(minute_label, "'+", -1), "'", ""), " ", 1) AS UNSIGNED)
+        
+        -- Case 2: Handles standard strings with appended remarks (e.g., "69' (penalty.)")
+        WHEN minute_label LIKE "%'%" THEN
+            CAST(SUBSTRING_INDEX(REPLACE(minute_label, "'", ""), " ", 1) AS UNSIGNED)
+        
+        -- Case 3: Standard fallback for already clean strings or plain numbers
+        ELSE 
+            CAST(SUBSTRING_INDEX(minute_label, " ", 1) AS UNSIGNED)
+    END
+-- CRUCIAL SAFE CLAUSE: Targets your data key to satisfy Error 1175
+WHERE tournament_id IS NOT NULL 
+  AND match_id IS NOT NULL
+  AND team_id IS NOT NULL;
+  
+  ALTER TABLE goals MODIFY COLUMN minute_label INT;
