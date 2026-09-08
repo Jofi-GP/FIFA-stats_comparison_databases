@@ -1,4 +1,4 @@
-# FIFA-stats databases analysis
+# FIFA WC-stats analysis
 Here I analyzed curated databases for FIFA historical statistics and compare each other on granularity, consistency,  missing elements and focus.  
 I used several approaches:   
   * python (through statsbompy to directly analyze JSON files in Jupyter)
