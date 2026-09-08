@@ -1,4 +1,6 @@
-# FIFA-stats_comparison_databases
-Welcome to my personal project! Here I will be analyzing curated databases for FIFA historical statistics and compare each other on granularity, consistency,  missing elements and focus. 
-This is an ongoing, still-building repo. You might peak into my scripts, but warnings must be presented: I am actively learning the dataset and have not tried all.
-And if you want to contribute, super!
+# FIFA-stats databases analysis
+Here I analyzed curated databases for FIFA historical statistics and compare each other on granularity, consistency,  missing elements and focus.  
+I used several approaches:   
+  * python (through statsbompy to directly analyze JSON files in Jupyter)
+  * MySQL (whole database download or partial dim_databases selecting particular years of the tournament)
+  * Power BI (for dashboard fun)
