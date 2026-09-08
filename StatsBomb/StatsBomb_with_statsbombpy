@@ -1,0 +1,368 @@
+!pip install pymysql
+pip install statsbombpy
+
+import warnings
+from statsbombpy.api_client import NoAuthWarning
+
+# Hide the specific StatsBomb credentials warning
+warnings.filterwarnings("ignore", category=NoAuthWarning)
+
+from statsbombpy import sb
+
+# 1. View all available free competitions
+df_competitions = sb.competitions()
+display(df_competitions.head())
+
+# 2. View matches for a specific tournament (e.g., 2022 World Cup)
+# Look up competition_id and season_id from the competitions table
+df_matches = sb.matches(competition_id=43, season_id=106)
+display(df_matches.head())
+
+
+# 3. Pull line-ups for a specific match
+df_lineups = sb.lineups(match_id=3869151)
+display(df_lineups)
+
+
+# 4. Pull all events for a match (This handles the cleaning and sorting automatically)
+df_events = sb.events(match_id=3869151)
+display(df_events.head())
+
+# Fetch all available free competitions
+df_comps = sb.competitions()
+
+# Filter for the Men's FIFA World Cup
+world_cups = df_comps[
+    (df_comps['competition_name'] == 'FIFA World Cup') & 
+    (df_comps['competition_gender'] == 'male')
+]
+
+# View the competition_id and available season_ids
+display(world_cups[['competition_id', 'season_name', 'season_id']])
+
+
+# 1. Pull all events for the match
+df_events = sb.events(match_id=3869151)
+
+# 2. Filter out shot events
+df_shots = df_events[df_events['type'] == 'Shot'].copy()
+
+# 3. Aggregate directly using the pre-flattened xG column
+# (We use shot_statsbomb_xg instead of trying to parse a nested 'shot' column)
+player_xg = df_shots.groupby('player')['shot_statsbomb_xg'].sum().sort_values(ascending=False)
+
+print("Highest xG Generation in the Match:")
+print(player_xg.head())
+
+import pandas as pd
+from statsbombpy import sb
+
+# 1. Grab all matches for the 2022 World Cup
+df_matches = sb.matches(competition_id=43, season_id=106)
+match_ids = df_matches['match_id'].unique().tolist()
+
+# 2. Loop through matches and collect events
+all_match_events = []
+
+print(f"Starting download for {len(match_ids)} matches...")
+for i, m_id in enumerate(match_ids, 1):
+    # Fetch events for the single match
+    events = sb.events(match_id=m_id)
+    
+    # OPTIONAL ANALYST STEP: 
+    # Keep only the rows we actually care about to save huge amounts of local RAM
+    filtered_events = events[events['type'].isin(['Shot', 'Pass', 'Ball Recovery', 'Interception', 'Tackle'])].copy()
+    
+    all_match_events.append(filtered_events)
+    
+    # Progress tracker
+    if i % 10 == 0 or i == len(match_ids):
+        print(f"Downloaded {i}/{len(match_ids)} matches.")
+
+# 3. Concatenate all pieces into your tournament DataFrame
+df_tournament_events = pd.concat(all_match_events, ignore_index=True)
+print("Tournament Data Successfully Loaded!")
+
+# Filter for all shots in the entire World Cup
+df_all_shots = df_tournament_events[df_tournament_events['type'] == 'Shot'].copy()
+
+# Group by player and sum up their total tournament xG
+top_finishers = df_all_shots.groupby(['player', 'team'])['shot_statsbomb_xg'].sum().sort_values(ascending=False)
+
+print("🥇 Top Tournament Players by xG Generation:")
+print(top_finishers.head(10))
+
+import numpy as np
+
+# --- 1. ATTACKING PILLAR: Expected Goals (xG) ---
+df_shots = df_tournament_events[df_tournament_events['type'] == 'Shot'].copy()
+# Ensure xG is numeric and fill missing values with 0
+df_shots['shot_statsbomb_xg'] = pd.to_numeric(df_shots['shot_statsbomb_xg'], errors='coerce').fillna(0)
+
+player_xg = df_shots.groupby(['player', 'team'])['shot_statsbomb_xg'].sum().reset_index()
+
+# --- 2. CREATION & ON-BALL PILLAR: OBV & Shot Assists ---
+# We look at Passes, Dribbles, and Carries (if available in the match event type)
+df_on_ball = df_tournament_events[df_tournament_events['type'].isin(['Pass', 'Dribble', 'Carry'])].copy()
+
+# Check if StatsBomb included their proprietary OBV column in this dataset split
+if 'obv_value' in df_on_ball.columns:
+    df_on_ball['obv_value'] = pd.to_numeric(df_on_ball['obv_value'], errors='coerce').fillna(0)
+    player_obv = df_on_ball.groupby(['player', 'team'])['obv_value'].sum().reset_index()
+else:
+    # Fallback Metric: Deep Completions & Shot Assists if OBV isn't in this specific open file
+    df_on_ball['is_shot_assist'] = df_on_ball['pass_shot_assist'].fillna(False).astype(bool)
+    player_obv = df_on_ball.groupby(['player', 'team'])['is_shot_assist'].sum().reset_index()
+    player_obv.rename(columns={'is_shot_assist': 'open_play_shot_assists'}, inplace=True)
+
+
+# --- 3. DEFENSIVE PILLAR: Defending Actions ---
+# We aggregate tackles, interceptions, blocks, pressures, and ball recoveries
+df_defense = df_tournament_events[
+    df_tournament_events['type'].isin(['Ball Recovery', 'Interception', 'Block', 'Pressure', 'Duel'])
+].copy()
+
+player_defense = df_defense.groupby(['player', 'team']).size().reset_index(name='defensive_actions')
+
+# Merge Attacking and Creation Data
+player_profile = pd.merge(player_xg, player_obv, on=['player', 'team'], how='outer')
+
+# Merge Defensive Data
+player_profile = pd.merge(player_profile, player_defense, on=['player', 'team'], how='outer')
+
+# Fill NaN values with 0 for players who didn't register a specific action type
+player_profile = player_profile.fillna(0)
+
+# Sort by highest xG and display relevant metrics
+print("⚽ TOP ATTACKERS & FINISHERS (Sorted by xG):")
+print(player_profile.sort_values(by='shot_statsbomb_xg', ascending=False).head(10).to_string(index=False))
+
+# Set a baseline filter for players who contribute to both phases
+obv_column = 'obv_value' if 'obv_value' in player_profile.columns else 'open_play_shot_assists'
+
+efficient_all_rounders = player_profile[
+    (player_profile[obv_column] > player_profile[obv_column].median()) & 
+    (player_profile['defensive_actions'] > player_profile['defensive_actions'].median())
+]
+
+print(f"\n📈 BALANCED ALL-ROUNDERS (High Ball Value & High Defensive Output):")
+print(efficient_all_rounders.sort_values(by=obv_column, ascending=False).head(10).to_string(index=False))
+
+
+import os
+import sys
+import pandas as pd
+from loguru import logger
+from statsbombpy import sb
+
+# 1. Permanently mute the credentials warning
+logger.remove()
+logger.add(sys.stderr, level="ERROR")
+
+# Local filenames using standard CSV
+EVENTS_CACHE = "wc2022_events_simple.csv"
+
+# 2. SAFE DATA LOADING (Using simple CSV)
+if os.path.exists(EVENTS_CACHE):
+    print("📦 Loading tournament data from your local CSV file...")
+    df_events = pd.read_csv(EVENTS_CACHE, low_memory=False)
+else:
+    print("⏳ Downloading 2022 World Cup data match-by-match (this takes about 2 mins)...")
+    df_matches = sb.matches(competition_id=43, season_id=106)
+    match_ids = df_matches['match_id'].unique().tolist()
+    
+    all_events = []
+    for i, m_id in enumerate(match_ids, 1):
+        # Fetch events for the single match
+        match_df = sb.events(match_id=m_id)
+        
+        # Keep ONLY the core columns we need to save memory and processing time
+        core_cols = ['match_id', 'player', 'team', 'type', 'minute', 'shot_statsbomb_xg', 'pass_shot_assist']
+        existing_cols = [c for c in core_cols if c in match_df.columns]
+        
+        all_events.append(match_df[existing_cols].copy())
+        
+        if i % 15 == 0 or i == len(match_ids):
+            print(f"Downloaded {i}/{len(match_ids)} matches...")
+            
+    df_events = pd.concat(all_events, ignore_index=True)
+    df_events.to_csv(EVENTS_CACHE, index=False)
+    print("✅ Download complete and saved to standard CSV!")
+
+# 3. CALCULATE METRICS
+print("\n📊 Aggregating player statistics...")
+
+# A. Attacking: Total Expected Goals (xG)
+df_shots = df_events[df_events['type'] == 'Shot'].copy()
+df_shots['shot_statsbomb_xg'] = pd.to_numeric(df_shots['shot_statsbomb_xg'], errors='coerce').fillna(0)
+player_xg = df_shots.groupby(['player', 'team'])['shot_statsbomb_xg'].sum().reset_index()
+
+# B. Playmaking: Open-Play Shot Assists
+df_passes = df_events[(df_events['type'] == 'Pass') & (df_events['pass_shot_assist'] == True)].copy()
+player_assists = df_passes.groupby(['player', 'team']).size().reset_index(name='shot_assists')
+
+# C. Defense: Combined Defensive Interventions
+df_defense = df_events[df_events['type'].isin(['Ball Recovery', 'Interception', 'Tackle', 'Block', 'Pressure'])].copy()
+player_defense = df_defense.groupby(['player', 'team']).size().reset_index(name='defensive_actions')
+
+# 4. COMBINE INTO A SINGLE TABLE
+player_profile = pd.merge(player_xg, player_assists, on=['player', 'team'], how='outer')
+player_profile = pd.merge(player_profile, player_defense, on=['player', 'team'], how='outer')
+player_profile = player_profile.fillna(0)
+
+# 5. ESTIMATE MINUTES PLAYED SIMPLY
+# Instead of slow lineups, we look at the difference between a player's first and last action in each match
+player_match_span = df_events.groupby(['player', 'team', 'match_id'])['minute'].agg(['min', 'max']).reset_index()
+player_match_span['mins_played'] = player_match_span['max'] - player_match_span['min']
+# Guard against 0 minutes for late subs by guaranteeing at least 1 minute per appearance
+player_match_span['mins_played'] = player_match_span['mins_played'].apply(lambda x: 5 if x < 5 else x)
+
+# Sum up total tournament minutes
+df_minutes = player_match_span.groupby(['player', 'team'])['mins_played'].sum().reset_index()
+df_minutes.rename(columns={'mins_played': 'total_minutes'}, inplace=True)
+df_minutes['90s_played'] = df_minutes['total_minutes'] / 90.0
+
+# 6. FINAL MERGE & NORMALIZATION
+final_scout = pd.merge(player_profile, df_minutes, on=['player', 'team'], how='inner')
+
+# Filter out players with less than 180 total tournament minutes (2 full games)
+final_scout = final_scout[final_scout['total_minutes'] >= 180].copy()
+
+# Compute Per 90 metrics
+final_scout['xG_per_90'] = final_scout['shot_statsbomb_xg'] / final_scout['90s_played']
+final_scout['assists_per_90'] = final_scout['shot_assists'] / final_scout['90s_played']
+final_scout['defense_per_90'] = final_scout['defensive_actions'] / final_scout['90s_played']
+
+print("🏆 METRICS COMPLETELY CALCULATED SUCCESSFULLY!")
+
+# Elite Finisher Rankings
+print("\n🔥 TOP 5 ATTACKERS (xG per 90):")
+print(final_scout.sort_values(by='xG_per_90', ascending=False)[['player', 'team', 'xG_per_90']].head(5).to_string(index=False))
+
+# Elite Playmaker Rankings
+print("\n🔮 TOP 5 CREATORS (Shot Assists per 90):")
+print(final_scout.sort_values(by='assists_per_90', ascending=False)[['player', 'team', 'assists_per_90']].head(5).to_string(index=False))
+
+print("⏳ Fetching authentic 2022 World Cup structural records...")
+# 1. Pull the official tournament summary table (1 second, no loops)
+df_matches_raw = sb.matches(competition_id=43, season_id=106)
+
+team_data = {}
+
+# 2. Extract true scorelines and stages from the structural matrix
+for _, match in df_matches_raw.iterrows():
+    home_team = match['home_team']
+    away_team = match['away_team']
+    home_score = int(match['home_score'])
+    away_score = int(match['away_score'])
+    stage = match['competition_stage']
+    
+    for t in [home_team, away_team]:
+        if t not in team_data:
+            team_data[t] = {
+                'Country': t, 
+                'Games Played': 0, 
+                'Goals Scored': 0, 
+                'Goals Taken': 0,
+                'Furthest Stage Reached': stage
+            }
+        
+        team_data[t]['Games Played'] += 1
+        
+        # Keep the absolute highest stage they reached in the tournament bracket
+        current_max = team_data[t]['Furthest Stage Reached']
+        if stage == 'Final':
+            team_data[t]['Furthest Stage Reached'] = 'Final'
+        elif stage == '3rd Place Play-off' and current_max not in ['Final']:
+            team_data[t]['Furthest Stage Reached'] = '3rd Place Play-off'
+        elif stage == 'Semi-finals' and current_max not in ['Final', '3rd Place Play-off']:
+            team_data[t]['Furthest Stage Reached'] = 'Semi-finals'
+
+    # Accumulate real regular/extra-time goals scored and conceded
+    team_data[home_team]['Goals Scored'] += home_score
+    team_data[home_team]['Goals Taken'] += away_score
+    team_data[away_team]['Goals Scored'] += away_score
+    team_data[away_team]['Goals Taken'] += home_score
+
+# 3. Format into a structured Pandas DataFrame
+df_sb_real = pd.DataFrame(team_data.values())
+
+# 4. Set the accurate chronological order for World Cup stages
+stage_sequence = ["Group Stage", "Round of 16", "Quarter-finals", "Semi-finals", "3rd Place Play-off", "Final"]
+df_sb_real['Furthest Stage Reached'] = pd.Categorical(df_sb_real['Furthest Stage Reached'], categories=stage_sequence, ordered=True)
+
+print("✅ Genuine StatsBomb team performance table compiled successfully!")
+
+# Display the exact reality-checked leaderboard
+df_sorted_wc = df_sb_real.sort_values(by=['Games Played', 'Furthest Stage Reached'], ascending=[False, False])
+display(df_sorted_wc.head(10))
+
+print("⏳ Downloading targeted tournament disciplinary data...")
+# 1. Pull the 2022 World Cup match index
+df_matches_raw = sb.matches(competition_id=43, season_id=106)
+
+# Create a dictionary to hold cards per match pairing
+match_card_map = {}
+
+# 2. Iterate through matches to count fouls/cards safely
+for _, match in df_matches_raw.iterrows():
+    m_id = match['match_id']
+    home_team = match['home_team']
+    away_team = match['away_team']
+    
+    # Request only the targeted columns we need to protect memory and speed
+    match_events = sb.events(match_id=m_id)
+    
+    # Initialize card columns if they are absent in certain low-foul matches
+    for col in ['foul_committed_card', 'bad_behaviour_card']:
+        if col not in match_events.columns:
+            match_events[col] = None
+
+    # Standardize and combine card events (on-pitch fouls + bench bad behavior)
+    match_events['card_type'] = match_events['foul_committed_card'].fillna(match_events['bad_behaviour_card']).astype(str).str.lower()
+    
+    # Filter card counts
+    yellows_df = match_events[match_events['card_type'].str.contains('yellow', na=False)]
+    reds_df = match_events[match_events['card_type'].str.contains('red|second yellow', na=False)]
+    
+    # Map counts to home and away teams
+    y_home = len(yellows_df[yellows_df['team'] == home_team])
+    y_away = len(yellows_df[yellows_df['team'] == away_team])
+    r_home = len(reds_df[reds_df['team'] == home_team])
+    r_away = len(reds_df[reds_df['team'] == away_team])
+    
+    # Update match mapping dictionary
+    match_card_map[m_id] = {
+        home_team: {'yellows_for': y_home, 'reds_for': r_home, 'yellows_against': y_away, 'reds_against': r_away},
+        away_team: {'yellows_for': y_away, 'reds_for': r_away, 'yellows_against': y_home, 'reds_against': r_home}
+    }
+
+print("📊 Aggregating tournament-wide team totals...")
+team_cards = {}
+for m_id, teams in match_card_map.items():
+    for team_name, stats in teams.items():
+        if team_name not in team_cards:
+            team_cards[team_name] = {'Country': team_name, 'Yellow Cards For': 0, 'Red Cards For': 0, 'Yellow Cards Against': 0, 'Red Cards Against': 0}
+        
+        team_cards[team_name]['Yellow Cards For'] += stats['yellows_for']
+        team_cards[team_name]['Red Cards For'] += stats['reds_for']
+        team_cards[team_name]['Yellow Cards Against'] += stats['yellows_against']
+        team_cards[team_name]['Red Cards Against'] += stats['reds_against']
+
+df_cards_final = pd.DataFrame(team_cards.values())
+print("✅ Disciplinary database successfully created!")
+
+
+# Merge the accurate goals/stages table with the new disciplinary table
+df_sb_complete = pd.merge(df_sb_real, df_cards_final, on='Country', how='inner')
+
+# Sort by Games Played and Furthest Stage Reached exactly like before
+df_sb_complete_sorted = df_sb_complete.sort_values(
+    by=['Games Played', 'Furthest Stage Reached'], 
+    ascending=[False, False]
+)
+
+# Display the clean master result
+display(df_sb_complete_sorted)
+
+
