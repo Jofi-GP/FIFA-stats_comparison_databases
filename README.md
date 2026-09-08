@@ -6,5 +6,5 @@ I used several approaches:
   * Power BI (for dashboard fun)
 ## Sources  
   * [FIFA World Cup 2026 Match Data](https://www.kaggle.com/datasets/swaptr/fifa-wc-2026-matches/data)  
-  * [FIFA World Cup by Fjelstul] (https://github.com/jfjelstul/worldcup)
+  * [FIFA World Cup by Fjelstul](https://github.com/jfjelstul/worldcup)
   * [StatsBomb Open Data](https://github.com/hudl/open-data)
